@@ -6,6 +6,12 @@ PUID="${PUID:-99}"
 PGID="${PGID:-100}"
 ZEC_NETWORK="${ZEC_NETWORK:-mainnet}"
 ZEC_MINER_ADDRESS="${ZEC_MINER_ADDRESS:-}"
+ZEC_PRUNE_KEEP_BLOCKS="${ZEC_PRUNE_KEEP_BLOCKS:-12000}"
+if [[ ! "$ZEC_PRUNE_KEEP_BLOCKS" =~ ^[0-9]{1,9}$ ]] || (( 10#$ZEC_PRUNE_KEEP_BLOCKS < 10000 )); then
+    echo 'ZEC_PRUNE_KEEP_BLOCKS must be an integer of at least 10000.' >&2
+    exit 1
+fi
+export ZEC_PRUNE_KEEP_BLOCKS="$((10#$ZEC_PRUNE_KEEP_BLOCKS))"
 
 if [[ ! "$PUID" =~ ^[0-9]+$ || ! "$PGID" =~ ^[0-9]+$ ]] ||
    (( 10#$PUID == 0 || 10#$PGID == 0 )); then
@@ -13,8 +19,8 @@ if [[ ! "$PUID" =~ ^[0-9]+$ || ! "$PGID" =~ ^[0-9]+$ ]] ||
     exit 1
 fi
 case "$ZEC_NETWORK" in
-    mainnet) network=Mainnet; p2p_port=8233 ;;
-    testnet) network=Testnet; p2p_port=18233 ;;
+    mainnet) network=Mainnet ;;
+    testnet) network=Testnet ;;
     *) echo 'ZEC_NETWORK must be mainnet or testnet.' >&2; exit 1 ;;
 esac
 if [[ -n "$ZEC_MINER_ADDRESS" && ! "$ZEC_MINER_ADDRESS" =~ ^[a-zA-Z0-9]+$ ]]; then
@@ -24,39 +30,13 @@ fi
 
 groupmod -o -g "$PGID" zebra
 usermod -o -u "$PUID" -g "$PGID" zebra
-install -d -m 750 -o "$PUID" -g "$PGID" /zcash /config /config/cloudflared
+install -d -m 750 -o "$PUID" -g "$PGID" /zcash /zcash/zakura /config /config/cloudflared
 install -d -m 700 -o "$PUID" -g "$PGID" /config/rpc /run/znode
 
-if [[ ! -e /config/zebrad.toml ]]; then
-    generated_config=$(mktemp /config/.zebrad.toml.XXXXXX)
-    trap 'rm -f -- "$generated_config"' EXIT
-    cat > "$generated_config" <<EOF
-[network]
-network = "$network"
-listen_addr = "0.0.0.0:$p2p_port"
-cache_dir = "/zcash"
-
-[state]
-cache_dir = "/zcash"
-
-[rpc]
-listen_addr = "127.0.0.1:8232"
-enable_cookie_auth = true
-cookie_dir = "/config/rpc"
-
-[tracing]
-use_color = false
-EOF
-    if [[ -n "$ZEC_MINER_ADDRESS" ]]; then
-        printf '\n[mining]\nminer_address = "%s"\n' "$ZEC_MINER_ADDRESS" >> "$generated_config"
-    fi
-    chown "$PUID:$PGID" "$generated_config"
-    chmod 600 "$generated_config"
-    mv -- "$generated_config" /config/zebrad.toml
-    trap - EXIT
-fi
-chown "$PUID:$PGID" /config/zebrad.toml
-chmod 600 /config/zebrad.toml
+python3 /usr/local/lib/znode/prepare_config.py --network "$network"
+chown "$PUID:$PGID" /config/zakura.toml
+chmod 600 /config/zakura.toml
+echo "Native pruning enabled: retain $ZEC_PRUNE_KEEP_BLOCKS finalized blocks."
 
 export ZNODE_TUNNEL_ENABLED=false
 if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
@@ -70,7 +50,7 @@ if [[ "$ZNODE_TUNNEL_ENABLED" == true ]]; then
     chown "$PUID:$PGID" /run/znode/tunnel-token
     chmod 600 /run/znode/tunnel-token
 else
-    echo 'Cloudflare token missing; Zebra will sync without a tunnel.'
+    echo 'Cloudflare token missing; Zakura will sync without a tunnel.'
 fi
 unset CLOUDFLARE_TUNNEL_TOKEN
 

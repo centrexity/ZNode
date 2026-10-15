@@ -7,7 +7,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 cookie=/config/rpc/.cookie
 if [[ ! -s "$cookie" ]]; then
-    echo 'RPC cookie is not available yet; check the Zebra startup log.' >&2
+    echo 'RPC cookie is not available yet; check the Zakura startup log.' >&2
     exit 1
 fi
 request=$(jq -cn --arg method "$1" --argjson params "${2:-[]}" \

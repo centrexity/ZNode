@@ -12,6 +12,10 @@ cache_dir = "/zcash"
 listen_addr = "127.0.0.1:8232"
 enable_cookie_auth = true
 cookie_dir = "/config/rpc"
+debug_force_finished_sync = true
 
 [tracing]
 use_color = false
+
+[mining]
+miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
