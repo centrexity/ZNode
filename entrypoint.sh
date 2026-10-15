@@ -6,6 +6,19 @@ PUID="${PUID:-99}"
 PGID="${PGID:-100}"
 ZEC_NETWORK="${ZEC_NETWORK:-mainnet}"
 ZEC_MINER_ADDRESS="${ZEC_MINER_ADDRESS:-}"
+pruning_line=""
+if [[ -n "${ZEC_PRUNE_KEEP_BLOCKS:-}" ]]; then
+    if [[ "${ZNODE_PRUNING_BUILD:-0}" != 1 ]]; then
+        echo 'Pruning requires the pruned-experimental image.' >&2
+        exit 1
+    fi
+    if [[ ! "$ZEC_PRUNE_KEEP_BLOCKS" =~ ^[0-9]{1,9}$ ]] || (( 10#$ZEC_PRUNE_KEEP_BLOCKS < 1000 )); then
+        echo 'ZEC_PRUNE_KEEP_BLOCKS must be an integer of at least 1000.' >&2
+        exit 1
+    fi
+    export ZEBRA_STATE__PRUNE_KEEP_BLOCKS="$((10#$ZEC_PRUNE_KEEP_BLOCKS))"
+    pruning_line="prune_keep_blocks = $ZEBRA_STATE__PRUNE_KEEP_BLOCKS"
+fi
 
 if [[ ! "$PUID" =~ ^[0-9]+$ || ! "$PGID" =~ ^[0-9]+$ ]] ||
    (( 10#$PUID == 0 || 10#$PGID == 0 )); then
@@ -38,6 +51,7 @@ cache_dir = "/zcash"
 
 [state]
 cache_dir = "/zcash"
+$pruning_line
 
 [rpc]
 listen_addr = "127.0.0.1:8232"

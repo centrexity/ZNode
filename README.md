@@ -4,6 +4,10 @@ Zcash node for Unraid using Zebra 6.4.2 and Cloudflare Tunnel 2026.10.0.
 The image extends the official `zfnd/zebra` Debian runtime. Zcashd has reached
 end of life, so this deployment uses the supported Zebra implementation.
 
+The `feature/pruning` branch adds a separate experimental native-pruning build;
+see [PRUNING.md](PRUNING.md). It does not certify a 5 GB Mainnet footprint or
+change the archival `latest` and `main` images.
+
 ## Unraid
 
 | Setting | Value |

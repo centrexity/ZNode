@@ -1,0 +1,21 @@
+[network]
+network = "Regtest"
+listen_addr = "127.0.0.1:18233"
+initial_testnet_peers = ["127.0.0.1:1"]
+cache_dir = "/zcash"
+
+[state]
+cache_dir = "/zcash"
+prune_keep_blocks = 1000
+
+[rpc]
+listen_addr = "127.0.0.1:8232"
+cookie_dir = "/config/rpc"
+enable_cookie_auth = true
+debug_force_finished_sync = true
+
+[mining]
+miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
+
+[tracing]
+use_color = false

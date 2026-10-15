@@ -1,0 +1,22 @@
+FROM rust:1.91.0-trixie AS build
+ARG BUILD_JOBS=2
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends libclang-dev protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch v6.4.2 https://github.com/ZcashFoundation/zebra.git /source && \
+    test "$(git -C /source rev-parse HEAD)" = e3eef2f37c35127ad1769f19a1ebc7eaa5d5d291
+WORKDIR /source
+COPY patches/zebra-pruning.patch /tmp/zebra-pruning.patch
+RUN git apply --check /tmp/zebra-pruning.patch && git apply /tmp/zebra-pruning.patch
+ENV CARGO_INCREMENTAL=0
+RUN cargo test --locked --release --package zebra-state pruning --jobs "$BUILD_JOBS" && \
+    cargo test --locked --release --package zebra-network pruning --jobs "$BUILD_JOBS" && \
+    cargo build --locked --release --package zebrad --features default-release-binaries --jobs "$BUILD_JOBS" && \
+    strip target/release/zebrad
+
+FROM ghcr.io/centrexity/znode:sha-f2a8a1335daf16f457eb95273c29be9a8c09f6ec
+COPY --from=build /source/target/release/zebrad /usr/local/bin/zebrad
+COPY entrypoint.sh /usr/local/bin/znode-entrypoint
+RUN chmod 755 /usr/local/bin/znode-entrypoint
+ENV ZNODE_PRUNING_BUILD=1 ZEC_PRUNE_KEEP_BLOCKS=1000
+LABEL org.opencontainers.image.title="ZNode experimental pruning"

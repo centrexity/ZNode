@@ -1,0 +1,1011 @@
+diff --git a/zebra-network/src/address_book.rs b/zebra-network/src/address_book.rs
+index 1141871..2c6564f 100644
+--- a/zebra-network/src/address_book.rs
++++ b/zebra-network/src/address_book.rs
+@@ -87,6 +87,9 @@ pub struct AddressBook {
+     /// The local listener address.
+     local_listener: SocketAddr,
+ 
++    /// Whether our own advertised address offers archival block service.
++    advertise_full_history: bool,
++
+     /// The configured Zcash network.
+     network: Network,
+ 
+@@ -160,6 +163,7 @@ impl AddressBook {
+         let mut new_book = AddressBook {
+             by_addr: IndexMap::new(),
+             local_listener: canonical_socket_addr(local_listener),
++            advertise_full_history: true,
+             network: network.clone(),
+             addr_limit: constants::MAX_ADDRS_IN_ADDRESS_BOOK,
+             span,
+@@ -267,14 +271,23 @@ impl AddressBook {
+         self.local_listener = addr;
+     }
+ 
++    /// Set whether our own address advertises archival block service.
++    pub(crate) fn set_full_history_advertisement(&mut self, enabled: bool) {
++        self.advertise_full_history = enabled;
++    }
++
+     /// Get the local listener address.
+     ///
+     /// This address contains minimal state, but it is not sanitized.
+     pub fn local_listener_meta_addr(&self, now: chrono::DateTime<Utc>) -> MetaAddr {
+         let now: DateTime32 = now.try_into().expect("will succeed until 2038");
+ 
+-        MetaAddr::new_local_listener_change(self.local_listener)
+-            .local_listener_into_new_meta_addr(now)
++        let mut local = MetaAddr::new_local_listener_change(self.local_listener)
++            .local_listener_into_new_meta_addr(now);
++        if !self.advertise_full_history {
++            local.services = Some(crate::protocol::external::types::PeerServices::empty());
++        }
++        local
+     }
+ 
+     /// Get the local listener [`SocketAddr`].
+@@ -955,6 +968,7 @@ impl Clone for AddressBook {
+         AddressBook {
+             by_addr: self.by_addr.clone(),
+             local_listener: self.local_listener,
++            advertise_full_history: self.advertise_full_history,
+             network: self.network.clone(),
+             addr_limit: self.addr_limit,
+             span: self.span.clone(),
+diff --git a/zebra-network/src/address_book/tests/vectors.rs b/zebra-network/src/address_book/tests/vectors.rs
+index dc06471..7c009f1 100644
+--- a/zebra-network/src/address_book/tests/vectors.rs
++++ b/zebra-network/src/address_book/tests/vectors.rs
+@@ -23,6 +23,32 @@ use crate::{
+     AddressBook,
+ };
+ 
++#[test]
++fn pruning_does_not_advertise_archival_service_in_peer_addresses() {
++    let mut address_book = AddressBook::new(
++        "127.0.0.1:8233".parse().unwrap(),
++        &Mainnet,
++        DEFAULT_MAX_CONNS_PER_IP,
++        Span::current(),
++    );
++    assert_eq!(
++        address_book.local_listener_meta_addr(Utc::now()).services(),
++        Some(PeerServices::NODE_NETWORK)
++    );
++    address_book.set_full_history_advertisement(false);
++    assert_eq!(
++        address_book.local_listener_meta_addr(Utc::now()).services(),
++        Some(PeerServices::empty())
++    );
++    assert_eq!(
++        address_book
++            .clone()
++            .local_listener_meta_addr(Utc::now())
++            .services(),
++        Some(PeerServices::empty())
++    );
++}
++
+ /// Make sure an empty address book is actually empty.
+ #[test]
+ fn address_book_empty() {
+diff --git a/zebra-network/src/config.rs b/zebra-network/src/config.rs
+index a27d2ae..4655f87 100644
+--- a/zebra-network/src/config.rs
++++ b/zebra-network/src/config.rs
+@@ -92,6 +92,9 @@ pub struct Config {
+     /// The network to connect to.
+     pub network: Network,
+ 
++    /// Whether to advertise support for serving the complete block history.
++    pub advertise_full_history: bool,
++
+     /// A list of initial peers for the peerset when operating on
+     /// mainnet.
+     pub initial_mainnet_peers: IndexSet<String>,
+@@ -575,6 +578,7 @@ impl Default for Config {
+                 .expect("Hardcoded address should be parseable"),
+             external_addr: None,
+             network: Network::Mainnet,
++            advertise_full_history: true,
+             initial_mainnet_peers: mainnet_peers,
+             initial_testnet_peers: testnet_peers,
+             cache_dir: CacheDir::default(),
+@@ -648,6 +652,7 @@ struct DConfig {
+     listen_addr: String,
+     external_addr: Option<String>,
+     network: DNetwork,
++    advertise_full_history: bool,
+ 
+     /// Legacy testnet parameters, kept for backwards compatibility.
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+@@ -669,6 +674,7 @@ impl Default for DConfig {
+             listen_addr: "[::]".to_string(),
+             external_addr: None,
+             network: Default::default(),
++            advertise_full_history: true,
+             testnet_parameters: None,
+             initial_mainnet_peers: config.initial_mainnet_peers,
+             initial_testnet_peers: config.initial_testnet_peers,
+@@ -728,6 +734,7 @@ impl From<Config> for DConfig {
+             listen_addr,
+             external_addr,
+             network,
++            advertise_full_history,
+             initial_mainnet_peers,
+             initial_testnet_peers,
+             cache_dir,
+@@ -761,6 +768,7 @@ impl From<Config> for DConfig {
+             listen_addr: listen_addr.to_string(),
+             external_addr: external_addr.map(|addr| addr.to_string()),
+             network: dnetwork,
++            advertise_full_history,
+             testnet_parameters: None,
+             initial_mainnet_peers,
+             initial_testnet_peers,
+@@ -781,6 +789,7 @@ impl<'de> Deserialize<'de> for Config {
+             listen_addr,
+             external_addr,
+             network: dnetwork,
++            advertise_full_history,
+             testnet_parameters,
+             initial_mainnet_peers,
+             initial_testnet_peers,
+@@ -857,6 +866,7 @@ impl<'de> Deserialize<'de> for Config {
+             listen_addr: canonical_socket_addr(listen_addr),
+             external_addr: external_socket_addr,
+             network,
++            advertise_full_history,
+             initial_mainnet_peers,
+             initial_testnet_peers,
+             cache_dir,
+diff --git a/zebra-network/src/peer_set/initialize.rs b/zebra-network/src/peer_set/initialize.rs
+index f80ab7e..e3c3a10 100644
+--- a/zebra-network/src/peer_set/initialize.rs
++++ b/zebra-network/src/peer_set/initialize.rs
+@@ -161,6 +161,10 @@ where
+         address_metrics,
+         address_book_updater_guard,
+     ) = AddressBookUpdater::spawn(&config, listen_addr);
++    address_book
++        .lock()
++        .expect("new address book mutex is not poisoned")
++        .set_full_history_advertisement(config.advertise_full_history);
+ 
+     let (misbehavior_tx, mut misbehavior_rx) = mpsc::channel(
+         // Leave enough room for a misbehaviour update on every peer connection
+@@ -226,7 +230,11 @@ where
+             .with_inbound_service(inbound_service)
+             .with_inventory_collector(inv_sender)
+             .with_address_book_updater(address_book_updater.clone())
+-            .with_advertised_services(PeerServices::NODE_NETWORK)
++            .with_advertised_services(if config.advertise_full_history {
++                PeerServices::NODE_NETWORK
++            } else {
++                PeerServices::empty()
++            })
+             .with_user_agent(user_agent)
+             .with_latest_chain_tip(latest_chain_tip.clone())
+             .want_transactions(true)
+diff --git a/zebra-rpc/src/methods.rs b/zebra-rpc/src/methods.rs
+index d2ec28c..e868d2e 100644
+--- a/zebra-rpc/src/methods.rs
++++ b/zebra-rpc/src/methods.rs
+@@ -871,6 +871,9 @@ where
+     /// if end of support is enforced on `network`. Reported by the `getdeprecationinfo` RPC.
+     end_of_support_height: Option<Height>,
+ 
++    /// Whether the state service removes historical block bodies.
++    pruned: bool,
++
+     // Services
+     //
+     /// A handle to the mempool service.
+@@ -986,6 +989,7 @@ where
+             network: network.clone(),
+             debug_force_finished_sync,
+             end_of_support_height: None,
++            pruned: false,
+             mempool: mempool.clone(),
+             state: state.clone(),
+             read_state: read_state.clone(),
+@@ -1006,6 +1010,12 @@ where
+         (rpc_impl, rpc_tx_queue_task_handle)
+     }
+ 
++    /// Set the pruning mode reported by `getblockchaininfo`.
++    pub fn with_pruned_state(mut self, pruned: bool) -> Self {
++        self.pruned = pruned;
++        self
++    }
++
+     /// Spawns a task that keeps a block template for the current chain tip precomputed, so
+     /// `getblocktemplate` calls only validate the tip against the state instead of reading the
+     /// mempool, selecting transactions, and building a coinbase transaction.
+@@ -1412,7 +1422,7 @@ where
+             verification_progress,
+             // TODO: store work in the finalized state for each height (#7109)
+             chain_work: 0,
+-            pruned: false,
++            pruned: self.pruned,
+             size_on_disk,
+             // TODO: Investigate whether this needs to be implemented (it's sprout-only in zcashd)
+             commitments: 0,
+@@ -3547,6 +3557,37 @@ where
+                     ),
+                 )))
+             }
++            zebra_state::ReadResponse::Transaction(None) if self.pruned => {
++                let rsp = self
++                    .read_state
++                    .clone()
++                    .oneshot(zebra_state::ReadRequest::PrunedUtxoInfo(outpoint))
++                    .await
++                    .map_misc_error()?;
++                let zebra_state::ReadResponse::PrunedUtxoInfo {
++                    utxo,
++                    tx_version,
++                    tip,
++                } = rsp
++                else {
++                    unreachable!("unmatched response to a `PrunedUtxoInfo` request");
++                };
++                let Some(utxo) = utxo else {
++                    return Ok(GetTxOutResponse(None));
++                };
++                let version = tx_version.ok_or_misc_error("missing pruned transaction version")?;
++                let (height, hash) = tip.ok_or_misc_error("No blocks in state")?;
++                Ok(GetTxOutResponse(Some(
++                    types::transaction::OutputObject::from_output(
++                        &utxo.output,
++                        hash.to_string(),
++                        height.0 - utxo.height.0 + 1,
++                        version,
++                        utxo.from_coinbase,
++                        self.network(),
++                    ),
++                )))
++            }
+             zebra_state::ReadResponse::Transaction(None) => Ok(GetTxOutResponse(None)),
+             _ => unreachable!("unmatched response to a `Transaction` request"),
+         }
+@@ -3799,7 +3840,7 @@ pub struct GetBlockchainInfoResponse {
+     #[serde(rename = "chainwork")]
+     chain_work: u64,
+ 
+-    /// Whether this node is pruned, currently always false in Zebra.
++    /// Whether this node removes historical block bodies.
+     pruned: bool,
+ 
+     /// The estimated size of the block and undo files on disk
+diff --git a/zebra-state/src/config.rs b/zebra-state/src/config.rs
+index 310df4b..9f85ca6 100644
+--- a/zebra-state/src/config.rs
++++ b/zebra-state/src/config.rs
+@@ -114,6 +114,12 @@ pub struct Config {
+     /// [`cache_dir`]: struct.Config.html#structfield.cache_dir
+     pub ephemeral: bool,
+ 
++    /// Experimental ZNode mode: retain this many finalized block payloads plus
++    /// genesis and format-check reference blocks. Validation state is retained.
++    /// Uses a separate cache namespace and does not impose a total disk quota.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub prune_keep_blocks: Option<u32>,
++
+     /// Whether to cache non-finalized blocks on disk to be restored when Zebra restarts.
+     ///
+     /// Set to `true` by default. If this is set to `false`, Zebra will irrecoverably drop
+@@ -196,10 +202,12 @@ impl Config {
+         if self.ephemeral {
+             gen_temp_path(&format!("zebra-{db_kind}-{major_version}-{net_dir}-"))
+         } else {
+-            self.cache_dir
+-                .join(db_kind)
+-                .join(major_version)
+-                .join(net_dir)
++            let cache_dir = if self.prune_keep_blocks.is_some() {
++                self.cache_dir.join("znode-pruned-v1")
++            } else {
++                self.cache_dir.clone()
++            };
++            cache_dir.join(db_kind).join(major_version).join(net_dir)
+         }
+     }
+ 
+@@ -246,6 +254,7 @@ impl Default for Config {
+         Self {
+             cache_dir: default_cache_dir(),
+             ephemeral: false,
++            prune_keep_blocks: None,
+             should_backup_non_finalized_state: true,
+             delete_old_database: true,
+             debug_stop_at_height: None,
+diff --git a/zebra-state/src/error.rs b/zebra-state/src/error.rs
+index 0726bca..b740ae4 100644
+--- a/zebra-state/src/error.rs
++++ b/zebra-state/src/error.rs
+@@ -50,6 +50,27 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+ #[derive(Debug, Error)]
+ #[non_exhaustive]
+ pub enum StateInitError {
++    /// Pruning must leave enough finalized history for contextual checks.
++    #[error("prune_keep_blocks must be at least {minimum}, got {requested}")]
++    PruningWindowTooSmall {
++        /// The configured history window.
++        requested: u32,
++        /// The minimum supported history window.
++        minimum: u32,
++    },
++
++    /// This experimental cache cannot be migrated using archival migrations.
++    #[error("experimental pruned state cannot be upgraded or downgraded; use a fresh cache")]
++    PruningFormatMismatch,
++
++    /// Indexing services need historical transactions that pruning removes.
++    #[error("experimental pruning cannot be combined with indexer or elasticsearch features")]
++    PruningIndexerConflict,
++
++    /// A pruning write failed before startup completed.
++    #[error("could not prune finalized transaction bodies: {0}")]
++    PruningWrite(rocksdb::Error),
++
+     /// A read-only state was requested, but the configured cache directory is
+     /// missing or unreadable.
+     ///
+diff --git a/zebra-state/src/request.rs b/zebra-state/src/request.rs
+index a5eacde..ecda3b1 100644
+--- a/zebra-state/src/request.rs
++++ b/zebra-state/src/request.rs
+@@ -1252,6 +1252,9 @@ pub enum ReadRequest {
+     /// Returned txids are in the order they appear in the block.
+     AnyChainTransactionIdsForBlock(HashOrHeight),
+ 
++    /// Looks up a pruned transaction's unspent output, exact version, and best-chain tip.
++    PrunedUtxoInfo(transparent::OutPoint),
++
+     /// Looks up a UTXO identified by the given [`OutPoint`](transparent::OutPoint),
+     /// returning `None` immediately if it is unknown.
+     ///
+@@ -1588,6 +1591,7 @@ impl ReadRequest {
+     pub fn variant_name(&self) -> &'static str {
+         match self {
+             ReadRequest::UsageInfo => "usage_info",
++            ReadRequest::PrunedUtxoInfo(_) => "pruned_utxo_info",
+             ReadRequest::Tip => "tip",
+             ReadRequest::TipPoolValues => "tip_pool_values",
+             ReadRequest::BlockInfo(_) => "block_info",
+diff --git a/zebra-state/src/response.rs b/zebra-state/src/response.rs
+index 0c888bb..a9cb188 100644
+--- a/zebra-state/src/response.rs
++++ b/zebra-state/src/response.rs
+@@ -375,6 +375,15 @@ impl Eq for NonFinalizedBlocksListener {}
+ /// A response to a read-only
+ /// [`ReadStateService`](crate::service::ReadStateService)'s [`ReadRequest`].
+ pub enum ReadResponse {
++    /// Output and retained transaction version, anchored to a single best-chain snapshot.
++    PrunedUtxoInfo {
++        /// An output that remains unspent in the best chain.
++        utxo: Option<transparent::Utxo>,
++        /// The creating transaction's version, retained before pruning its body.
++        tx_version: Option<u32>,
++        /// Best-chain height and hash used to calculate confirmations.
++        tip: Option<(block::Height, block::Hash)>,
++    },
+     /// Response to [`ReadRequest::UsageInfo`] with the current best chain tip.
+     UsageInfo(u64),
+ 
+@@ -620,6 +629,7 @@ impl TryFrom<ReadResponse> for Response {
+             ReadResponse::ValidBestChainTipNullifiersAndAnchors => Ok(Response::ValidBestChainTipNullifiersAndAnchors),
+ 
+             ReadResponse::UsageInfo(_)
++            | ReadResponse::PrunedUtxoInfo { .. }
+             | ReadResponse::TipPoolValues { .. }
+             | ReadResponse::BlockInfo(_)
+             | ReadResponse::TransactionIdsForBlock(_)
+diff --git a/zebra-state/src/service.rs b/zebra-state/src/service.rs
+index 1102a35..2fc0f5b 100644
+--- a/zebra-state/src/service.rs
++++ b/zebra-state/src/service.rs
+@@ -466,7 +466,14 @@ impl StateService {
+                     tip.1,
+                 ),
+                 &state.network,
+-                MAX_LEGACY_CHAIN_BLOCKS,
++                config
++                    .prune_keep_blocks
++                    .map_or(MAX_LEGACY_CHAIN_BLOCKS, |keep| {
++                        MAX_LEGACY_CHAIN_BLOCKS.min(
++                            usize::try_from(keep - 1)
++                                .expect("the validated retention window fits in usize"),
++                        )
++                    }),
+             ) {
+                 let legacy_db_path = state.read_service.db.path().to_path_buf();
+                 panic!(
+@@ -1418,6 +1425,14 @@ impl Service<ReadRequest> for ReadStateService {
+         let request_handler = move || match req {
+             // Used by the `getblockchaininfo` RPC.
+             ReadRequest::UsageInfo => Ok(ReadResponse::UsageInfo(state.db.size())),
++            ReadRequest::PrunedUtxoInfo(outpoint) => {
++                let chain = state.latest_best_chain();
++                Ok(ReadResponse::PrunedUtxoInfo {
++                    utxo: read::unspent_utxo(chain.clone(), &state.db, outpoint),
++                    tx_version: state.db.pruned_transaction_version(outpoint.hash),
++                    tip: read::tip(chain, &state.db),
++                })
++            }
+ 
+             // Used by the StateService.
+             ReadRequest::Tip => Ok(ReadResponse::Tip(read::tip(
+diff --git a/zebra-state/src/service/finalized_state/disk_db.rs b/zebra-state/src/service/finalized_state/disk_db.rs
+index 907cd4e..8783455 100644
+--- a/zebra-state/src/service/finalized_state/disk_db.rs
++++ b/zebra-state/src/service/finalized_state/disk_db.rs
+@@ -1151,6 +1151,39 @@ impl DiskDb {
+         self.db.write(batch.batch)
+     }
+ 
++    /// Reclaim SST storage for expired block payloads after range deletion.
++    pub(crate) fn compact_pruned_blocks(
++        &self,
++        until: zebra_chain::block::Height,
++    ) -> Result<(), rocksdb::Error> {
++        use super::disk_format::TransactionLocation;
++        if until.0 <= 1 {
++            return Ok(());
++        }
++        let from = zebra_chain::block::Height(1);
++        for (name, start, end) in [
++            (
++                "tx_by_loc",
++                TransactionLocation::min_for_height(from)
++                    .as_bytes()
++                    .to_vec(),
++                TransactionLocation::min_for_height(until)
++                    .as_bytes()
++                    .to_vec(),
++            ),
++            (
++                "block_header_by_height",
++                from.as_bytes().to_vec(),
++                until.as_bytes().to_vec(),
++            ),
++        ] {
++            let cf = self.cf_handle(name).expect("prunable column is registered");
++            self.db.flush_cf(&cf)?;
++            self.db.compact_range_cf(&cf, Some(start), Some(end));
++        }
++        Ok(())
++    }
++
+     // Private methods
+ 
+     /// Tries to reuse an existing db after a major upgrade.
+diff --git a/zebra-state/src/service/finalized_state/zebra_db.rs b/zebra-state/src/service/finalized_state/zebra_db.rs
+index dbc9d7a..6c28f0e 100644
+--- a/zebra-state/src/service/finalized_state/zebra_db.rs
++++ b/zebra-state/src/service/finalized_state/zebra_db.rs
+@@ -34,6 +34,7 @@ use super::disk_format::upgrade::restorable_db_versions;
+ pub mod block;
+ pub mod chain;
+ pub mod metrics;
++mod pruning;
+ pub mod shielded;
+ pub mod transparent;
+ 
+@@ -101,6 +102,17 @@ impl ZebraDb {
+         column_families_in_code: impl IntoIterator<Item = String>,
+         read_only: bool,
+     ) -> Result<ZebraDb, StateInitError> {
++        if let Some(keep) = config.prune_keep_blocks {
++            if keep < crate::MAX_BLOCK_REORG_HEIGHT {
++                return Err(StateInitError::PruningWindowTooSmall {
++                    requested: keep,
++                    minimum: crate::MAX_BLOCK_REORG_HEIGHT,
++                });
++            }
++            if cfg!(any(feature = "indexer", feature = "elasticsearch")) {
++                return Err(StateInitError::PruningIndexerConflict);
++            }
++        }
+         // A read-only secondary instance must never modify the primary's cache directory, so it
+         // skips the post-major-upgrade DB reuse (which can create directories and rename the
+         // on-disk database) and reads the on-disk format version directly. The cache directory is
+@@ -119,6 +131,9 @@ impl ZebraDb {
+ 
+             database_format_version_on_disk(config, &db_kind, format_version_in_code.major, network)
+                 .expect("unable to read database format version file")
++        } else if config.prune_keep_blocks.is_some() {
++            database_format_version_on_disk(config, &db_kind, format_version_in_code.major, network)
++                .expect("the pruned database version file must be readable")
+         } else {
+             DiskDb::try_reusing_previous_db_after_major_upgrade(
+                 &restorable_db_versions(),
+@@ -138,6 +153,14 @@ impl ZebraDb {
+             })
+         };
+ 
++        if config.prune_keep_blocks.is_some()
++            && disk_version
++                .as_ref()
++                .is_some_and(|version| version != format_version_in_code)
++        {
++            return Err(StateInitError::PruningFormatMismatch);
++        }
++
+         // Log any format changes before opening the database, in case opening fails.
+         let format_change = DbFormatChange::open_database(format_version_in_code, disk_version);
+ 
+@@ -167,7 +190,11 @@ impl ZebraDb {
+             db_kind,
+             format_version_in_code,
+             network,
+-            column_families_in_code,
++            column_families_in_code.into_iter().chain(
++                config
++                    .prune_keep_blocks
++                    .map(|_| pruning::TX_VERSION_COLUMN.to_owned()),
++            ),
+             read_only,
+         )?;
+ 
+@@ -194,6 +221,10 @@ impl ZebraDb {
+             )
+         }
+ 
++        if !read_only {
++            db.prune_existing_history()
++                .map_err(StateInitError::PruningWrite)?;
++        }
+         db.spawn_format_change(format_change);
+ 
+         Ok(db)
+diff --git a/zebra-state/src/service/finalized_state/zebra_db/block.rs b/zebra-state/src/service/finalized_state/zebra_db/block.rs
+index 120bcd2..d77511a 100644
+--- a/zebra-state/src/service/finalized_state/zebra_db/block.rs
++++ b/zebra-state/src/service/finalized_state/zebra_db/block.rs
+@@ -165,12 +165,16 @@ impl ZebraDb {
+         //   this improves performance for blocks with multiple large shielded transactions
+         // - is this loop more efficient if we store the number of transactions?
+         // - is the difference large enough to matter?
+-        let transactions = self
++        let transactions: Vec<_> = self
+             .transactions_by_height(height)
+             .map(|(_, tx)| tx)
+             .map(Arc::new)
+             .collect();
+ 
++        if self.config.prune_keep_blocks.is_some() && transactions.is_empty() {
++            return None;
++        }
++
+         Some(Arc::new(Block {
+             header,
+             transactions,
+@@ -222,11 +226,15 @@ impl ZebraDb {
+ 
+         // Transactions
+ 
+-        let transactions = self
++        let transactions: Vec<_> = self
+             .raw_transactions_by_height(height)
+             .map(|(_, tx)| tx)
+             .collect();
+ 
++        if self.config.prune_keep_blocks.is_some() && transactions.is_empty() {
++            return None;
++        }
++
+         Some((header, transactions))
+     }
+ 
+@@ -580,6 +588,8 @@ impl ZebraDb {
+             prev_note_commitment_trees,
+         )?;
+ 
++        self.prepare_history_pruning(&mut batch, finalized.height);
++
+         // Track batch commit latency for observability
+         let batch_start = std::time::Instant::now();
+         if let Err(error) = self.db.write(batch) {
+@@ -588,6 +598,8 @@ impl ZebraDb {
+         metrics::histogram!("zebra.state.rocksdb.batch_commit.duration_seconds")
+             .record(batch_start.elapsed().as_secs_f64());
+ 
++        self.compact_pruned_history(finalized.height);
++
+         tracing::trace!(?source, "committed block from");
+ 
+         Ok(finalized.hash)
+diff --git a/zebra-state/src/service/finalized_state/zebra_db/pruning.rs b/zebra-state/src/service/finalized_state/zebra_db/pruning.rs
+new file mode 100644
+index 0000000..6fdb95f
+--- /dev/null
++++ b/zebra-state/src/service/finalized_state/zebra_db/pruning.rs
+@@ -0,0 +1,350 @@
++//! Opt-in removal of old finalized block payloads, never validation state.
++
++use std::collections::BTreeSet;
++
++use zebra_chain::{block::Height, transaction};
++
++use crate::service::finalized_state::{
++    DiskWriteBatch, FromDisk, IntoDisk, ReadDisk, TransactionLocation, WriteDisk,
++};
++
++use super::ZebraDb;
++
++pub(super) const TX_VERSION_COLUMN: &str = "znode_tx_version_by_loc";
++
++struct TransactionVersion(u32);
++
++impl IntoDisk for TransactionVersion {
++    type Bytes = [u8; 4];
++
++    fn as_bytes(&self) -> Self::Bytes {
++        self.0.to_le_bytes()
++    }
++}
++
++impl FromDisk for TransactionVersion {
++    fn from_bytes(bytes: impl AsRef<[u8]>) -> Self {
++        Self(u32::from_le_bytes(
++            bytes
++                .as_ref()
++                .try_into()
++                .expect("stored transaction version is four bytes"),
++        ))
++    }
++}
++
++/// The first height in the retained contiguous finalized history window.
++/// Genesis is always retained separately.
++fn cutoff(tip: Height, keep: u32) -> Height {
++    Height(tip.0.saturating_sub(keep.saturating_sub(1)).max(1))
++}
++
++fn deletion_ranges(
++    from: Height,
++    until: Height,
++    protected: &BTreeSet<Height>,
++) -> Vec<(Height, Height)> {
++    let mut ranges = Vec::new();
++    let mut start = Height(from.0.max(1));
++    if start >= until {
++        return ranges;
++    }
++    for retained in protected.range(start..until) {
++        if start < *retained {
++            ranges.push((start, *retained));
++        }
++        start = Height(retained.0 + 1);
++    }
++    if start < until {
++        ranges.push((start, until));
++    }
++    ranges
++}
++
++impl ZebraDb {
++    /// Delete newly expired bodies in the same atomic batch as the new block.
++    pub(super) fn prepare_history_pruning(&self, batch: &mut DiskWriteBatch, tip: Height) {
++        let Some(keep) = self.config.prune_keep_blocks else {
++            return;
++        };
++        let previous_cutoff = self
++            .finalized_tip_height()
++            .map_or(Height(1), |old| cutoff(old, keep));
++        self.prune_body_range(batch, previous_cutoff, cutoff(tip, keep));
++    }
++
++    /// Catch up after lowering the retention window on restart.
++    pub(super) fn prune_existing_history(&self) -> Result<(), rocksdb::Error> {
++        let (Some(keep), Some(tip)) = (self.config.prune_keep_blocks, self.finalized_tip_height())
++        else {
++            return Ok(());
++        };
++        let until = cutoff(tip, keep);
++        let mut from = Height(1);
++        while from < until {
++            let end = Height(from.0.saturating_add(128).min(until.0));
++            let mut batch = DiskWriteBatch::new();
++            self.prune_body_range(&mut batch, from, end);
++            self.db.write(batch)?;
++            from = end;
++        }
++        self.db.compact_pruned_blocks(cutoff(tip, keep))
++    }
++
++    /// Exact version metadata retained for RPC access to old transparent outputs.
++    pub fn pruned_transaction_version(&self, hash: transaction::Hash) -> Option<u32> {
++        self.config.prune_keep_blocks?;
++        let location = self.transaction_location(hash)?;
++        let cf = self
++            .db
++            .cf_handle(TX_VERSION_COLUMN)
++            .expect("pruned metadata column is registered");
++        self.db
++            .zs_get::<_, _, TransactionVersion>(&cf, &location)
++            .map(|version| version.0)
++    }
++
++    /// Keep the two reference blocks required by upstream's subtree format checks.
++    fn reference_blocks(&self) -> BTreeSet<Height> {
++        self.sapling_subtree_by_index(0u16)
++            .map(|subtree| subtree.end_height)
++            .into_iter()
++            .chain(
++                self.orchard_subtree_by_index(0u16)
++                    .map(|subtree| subtree.end_height),
++            )
++            .collect()
++    }
++
++    fn prune_body_range(&self, batch: &mut DiskWriteBatch, from: Height, until: Height) {
++        let cf = self
++            .db
++            .cf_handle("tx_by_loc")
++            .expect("transaction bodies column is registered");
++        let headers = self
++            .db
++            .cf_handle("block_header_by_height")
++            .expect("block headers column is registered");
++        let versions = self
++            .db
++            .cf_handle(TX_VERSION_COLUMN)
++            .expect("pruned metadata column is registered");
++        for (from, until) in deletion_ranges(from, until, &self.reference_blocks()) {
++            for (location, tx) in self.transactions_by_location_range(
++                TransactionLocation::min_for_height(from)
++                    ..TransactionLocation::min_for_height(until),
++            ) {
++                if !tx.outputs().is_empty() {
++                    batch.zs_insert(&versions, location, TransactionVersion(tx.version()));
++                }
++            }
++            batch.zs_delete_range(
++                &cf,
++                TransactionLocation::min_for_height(from),
++                TransactionLocation::min_for_height(until),
++            );
++            batch.zs_delete_range(&headers, from, until);
++        }
++    }
++
++    /// Periodically compact expired payloads during initial sync.
++    pub(super) fn compact_pruned_history(&self, tip: Height) {
++        if let Some(keep) = self.config.prune_keep_blocks {
++            if tip.0 > keep && tip.0.is_multiple_of(1000) {
++                if let Err(error) = self.db.compact_pruned_blocks(cutoff(tip, keep)) {
++                    tracing::error!(?error, "could not reclaim pruned block SST files");
++                }
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::sync::Arc;
++
++    use zebra_chain::{
++        block::Block, parameters::Network, serialization::ZcashDeserializeInto,
++        transparent::OutPoint,
++    };
++    use zebra_test::vectors::MAINNET_BLOCKS;
++
++    use crate::{
++        service::finalized_state::{FinalizedState, STATE_COLUMN_FAMILIES_IN_CODE},
++        Config, StateInitError,
++    };
++
++    use super::*;
++
++    #[test]
++    fn pruning_cutoff_preserves_genesis_and_boundary() {
++        assert_eq!(cutoff(Height(0), 1000), Height(1));
++        assert_eq!(cutoff(Height(999), 1000), Height(1));
++        assert_eq!(cutoff(Height(1000), 1000), Height(1));
++        assert_eq!(cutoff(Height(1001), 1000), Height(2));
++        assert_eq!(cutoff(Height(u32::MAX), 1000), Height(u32::MAX - 999));
++    }
++
++    #[test]
++    fn pruning_ranges_keep_reference_blocks_and_exclusive_boundary() {
++        let protected = BTreeSet::from([Height(2), Height(4)]);
++        assert_eq!(
++            deletion_ranges(Height(0), Height(6), &protected),
++            vec![
++                (Height(1), Height(2)),
++                (Height(3), Height(4)),
++                (Height(5), Height(6))
++            ]
++        );
++        assert!(deletion_ranges(Height(2), Height(3), &protected).is_empty());
++        assert!(deletion_ranges(Height(6), Height(1), &protected).is_empty());
++        assert_eq!(
++            deletion_ranges(Height(4), Height(6), &protected),
++            vec![(Height(5), Height(6))]
++        );
++    }
++
++    #[test]
++    fn pruning_cache_is_separate_from_archival_cache() {
++        let archive = Config::default();
++        let pruned = Config {
++            prune_keep_blocks: Some(1000),
++            ..archive.clone()
++        };
++        assert_ne!(
++            archive.db_path("state", 28, &Network::Mainnet),
++            pruned.db_path("state", 28, &Network::Mainnet)
++        );
++        assert_eq!(
++            pruned.db_path("state", 28, &Network::Mainnet),
++            pruned.cache_dir.join("znode-pruned-v1/state/v28/mainnet")
++        );
++    }
++
++    #[test]
++    fn pruning_rejects_small_windows_before_opening_state() {
++        let config = Config {
++            prune_keep_blocks: Some(999),
++            ..Config::ephemeral()
++        };
++        let result = FinalizedState::new(
++            &config,
++            &Network::Mainnet,
++            #[cfg(feature = "elasticsearch")]
++            false,
++        );
++        assert!(matches!(
++            result,
++            Err(StateInitError::PruningWindowTooSmall { .. })
++        ));
++    }
++
++    #[cfg(not(any(feature = "indexer", feature = "elasticsearch")))]
++    #[test]
++    fn pruning_real_blocks_preserves_validation_state_and_survives_reopen() {
++        let _init = zebra_test::init();
++        let cache = tempfile::tempdir().expect("scratch directory can be created");
++        let config = Config {
++            cache_dir: cache.path().to_path_buf(),
++            prune_keep_blocks: Some(1000),
++            ..Config::default()
++        };
++        let mut state = FinalizedState::new_with_debug(&config, &Network::Mainnet, true, false)
++            .expect("fresh pruned state can be created");
++        let blocks: Vec<Arc<Block>> = (0..6)
++            .map(|height| {
++                Arc::new(
++                    MAINNET_BLOCKS
++                        .get(&height)
++                        .expect("early mainnet fixture exists")
++                        .zcash_deserialize_into()
++                        .expect("fixture block is valid"),
++                )
++            })
++            .collect();
++        for block in &blocks {
++            state
++                .commit_finalized_direct(block.clone().into(), None, "pruning-test")
++                .expect("verified fixture chain commits");
++        }
++        let outpoint = OutPoint {
++            hash: blocks[1].transactions[0].hash(),
++            index: 0,
++        };
++        let previous_output = state
++            .db
++            .utxo(&outpoint)
++            .expect("old coinbase is unspent")
++            .utxo
++            .output;
++        let snapshot = || {
++            STATE_COLUMN_FAMILIES_IN_CODE
++                .iter()
++                .filter(|name| **name != "tx_by_loc" && **name != "block_header_by_height")
++                .map(|name| {
++                    let cf = state.db.db.cf_handle(name).expect("column is registered");
++                    let rows: Vec<_> = state
++                        .db
++                        .db
++                        .iterator_cf(&cf, rocksdb::IteratorMode::Start)
++                        .map(|row| row.expect("scratch database reads succeed"))
++                        .collect();
++                    (*name, rows)
++                })
++                .collect::<Vec<_>>()
++        };
++        let preserved = snapshot();
++        let mut batch = DiskWriteBatch::new();
++        state.db.prune_body_range(&mut batch, Height(1), Height(4));
++        state
++            .db
++            .write_batch(batch)
++            .expect("pruning batch commits atomically");
++        state
++            .db
++            .db
++            .compact_pruned_blocks(Height(4))
++            .expect("scratch SST compaction succeeds");
++        assert_eq!(preserved, snapshot());
++        assert_eq!(
++            state.db.pruned_transaction_version(outpoint.hash),
++            Some(blocks[1].transactions[0].version())
++        );
++        assert!(state.db.block(Height(0).into()).is_some());
++        for height in 1..4 {
++            assert!(state.db.block(Height(height).into()).is_none());
++            assert!(state.db.block_and_size(Height(height).into()).is_none());
++            assert!(state.db.block_header(Height(height).into()).is_none());
++            assert_eq!(
++                state.db.hash(Height(height)),
++                Some(blocks[usize::try_from(height).expect("fixture height fits in usize")].hash())
++            );
++        }
++        assert_eq!(state.db.block(Height(4).into()), Some(blocks[4].clone()));
++        assert_eq!(
++            state
++                .db
++                .utxo(&outpoint)
++                .expect("pruning retains UTXO")
++                .utxo
++                .output,
++            previous_output
++        );
++        assert!(state.db.transaction(outpoint.hash).is_none());
++        assert!(state.db.transaction_location(outpoint.hash).is_some());
++        drop(state);
++        let reopened = FinalizedState::new_with_debug(&config, &Network::Mainnet, true, false)
++            .expect("pruned state can reopen");
++        assert!(reopened.db.block(Height(1).into()).is_none());
++        assert_eq!(reopened.db.block(Height(5).into()), Some(blocks[5].clone()));
++        assert_eq!(
++            reopened
++                .db
++                .utxo(&outpoint)
++                .expect("reopened UTXO is retained")
++                .utxo
++                .output,
++            previous_output
++        );
++    }
++}
+diff --git a/zebrad/src/commands/start.rs b/zebrad/src/commands/start.rs
+index 962e929..48dde38 100644
+--- a/zebrad/src/commands/start.rs
++++ b/zebrad/src/commands/start.rs
+@@ -384,9 +384,13 @@ impl StartCmd {
+                 setup_rx,
+             ));
+ 
++        let mut network_config = config.network.clone();
++        if config.state.prune_keep_blocks.is_some() {
++            network_config.advertise_full_history = false;
++        }
+         let (peer_set, address_book, misbehavior_sender) =
+             zebra_network::init_with_block_gossip_peer_ips(
+-                config.network.clone(),
++                network_config,
+                 inbound,
+                 latest_chain_tip.clone(),
+                 user_agent(),
+@@ -481,9 +485,11 @@ impl StartCmd {
+             LAST_WARN_ERROR_LOG_SENDER.subscribe(),
+             Some(submit_block_channel.sender()),
+         );
+-        let rpc_impl = rpc_impl.with_end_of_support_height(
+-            sync::end_of_support::end_of_support_height(&config.network.network),
+-        );
++        let rpc_impl = rpc_impl
++            .with_pruned_state(config.state.prune_keep_blocks.is_some())
++            .with_end_of_support_height(sync::end_of_support::end_of_support_height(
++                &config.network.network,
++            ));
+ 
+         // Keep a block template ready for the `getblocktemplate` RPC, if this node is configured
+         // for mining, and something can actually ask for a template. Without the RPC server and
