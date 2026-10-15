@@ -31,7 +31,7 @@ with open("/config/zakura.toml", "rb") as config_file:
     config = tomllib.load(config_file)
 assert config["network"]["network"] == "Mainnet"
 assert config["state"]["cache_dir"] == "/zcash/zakura"
-assert config["state"]["storage_mode"]["pruned"]["tx_retention"] == 12000
+assert config["state"]["storage_mode"]["pruned"]["tx_retention"] == 10000
 assert config["rpc"]["listen_addr"] == "127.0.0.1:8232"
 assert config["rpc"]["enable_cookie_auth"] is True
 assert config["rpc"]["cookie_dir"] == "/config/rpc"

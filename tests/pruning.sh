@@ -29,10 +29,10 @@ rpc generate '[1]' > "$results/first-block.json"
 jq -e '.error == null and (.result | length) == 1' "$results/first-block.json" >/dev/null
 rpc getblock '["1",1]' > "$results/old-block.json"
 old_tx=$(jq -er '.result.tx[0]' "$results/old-block.json")
-rpc generate '[13005]' > "$results/generated.json"
-jq -e '.error == null and (.result | length) == 13005' "$results/generated.json" >/dev/null
+rpc generate '[11005]' > "$results/generated.json"
+jq -e '.error == null and (.result | length) == 11005' "$results/generated.json" >/dev/null
 rpc getblockchaininfo > "$results/pruned-info.json"
-jq -e '.error == null and .result.pruned == true and .result.blocks == 13006 and (.result.blocks - 1000 - .result.pruneheight + 1) == 12000' "$results/pruned-info.json" >/dev/null
+jq -e '.error == null and .result.pruned == true and .result.blocks == 11006 and (.result.blocks - 1000 - .result.pruneheight + 1) == 10000' "$results/pruned-info.json" >/dev/null
 floor=$(jq -er '.result.pruneheight' "$results/pruned-info.json")
 rpc getblock "$(jq -cn --arg height "$((floor-1))" '[$height,0]')" > "$results/pruned-block.json"
 jq -e '.error != null and .result == null' "$results/pruned-block.json" >/dev/null
@@ -50,17 +50,17 @@ rpc getbestblockhash > "$results/tip.json"
 rpc invalidateblock "$(jq -c '[.result]' "$results/tip.json")" > "$results/invalidated.json"
 jq -e '.error == null' "$results/invalidated.json" >/dev/null
 rpc getblockcount > "$results/reorg-count.json"
-jq -e '.error == null and .result == 13005' "$results/reorg-count.json" >/dev/null
+jq -e '.error == null and .result == 11005' "$results/reorg-count.json" >/dev/null
 rpc generate '[1]' > "$results/replacement.json"
 jq -e '.error == null and (.result | length) == 1' "$results/replacement.json" >/dev/null
 sleep 6
 docker restart --time 120 "$container" >/dev/null
 wait_for_rpc
 rpc getblockchaininfo > "$results/reopened.json"
-jq -e '.error == null and .result.pruned == true and .result.blocks == 13006' "$results/reopened.json" >/dev/null
+jq -e '.error == null and .result.pruned == true and .result.blocks == 11006' "$results/reopened.json" >/dev/null
 rpc getaddressutxos "$address_params" > "$results/reopened-utxos.json"
 jq -e --arg tx "$old_tx" '.error == null and any(.result[]; .txid == $tx and .outputIndex == 0)' "$results/reopened-utxos.json" >/dev/null
 rpc generate '[1]' > "$results/after-restart.json"
 jq -e '.error == null and (.result | length) == 1' "$results/after-restart.json" >/dev/null
 docker exec "$container" du -sk /zcash > "$results/regtest-storage-kib.txt"
-echo 'PASS: native 12000-block pruning boundary, retained UTXO/header/hash, recent reorg, and mining after restart'
+echo 'PASS: native 10000-block pruning boundary, retained UTXO/header/hash, recent reorg, and mining after restart'

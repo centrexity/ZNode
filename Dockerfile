@@ -19,7 +19,7 @@ RUN chmod 755 /usr/local/bin/znode-entrypoint /usr/local/bin/znode-rpc \
     /usr/local/bin/znode-healthcheck
 
 VOLUME ["/zcash", "/config"]
-ENV ZEC_PRUNE_KEEP_BLOCKS=12000
+ENV ZEC_PRUNE_KEEP_BLOCKS=10000
 LABEL org.opencontainers.image.source="https://github.com/centrexity/ZNode" \
       org.opencontainers.image.title="ZNode"
 HEALTHCHECK --interval=60s --timeout=10s --start-period=120s \

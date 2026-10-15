@@ -1,7 +1,7 @@
 # ZNode
 
 Zcash node for Unraid using prebuilt Zakura 1.6.0 and Cloudflare Tunnel
-2026.10.0. Native pruning retains **12,000 finalized block bodies** by default.
+2026.10.0. Native pruning retains **10,000 finalized block bodies** by default.
 The image extends the official `zakuracore/zakura` Debian runtime: no custom
 node compilation, source patches, or snapshot download is required.
 
@@ -29,21 +29,21 @@ The managed configuration is:
 cache_dir = "/zcash/zakura"
 
 [state.storage_mode.pruned]
-tx_retention = 12000
+tx_retention = 10000
 ```
 
 Zakura downloads and validates history while discarding eligible transaction
 bodies. It retains historical headers, indexes, UTXOs, nullifiers, and other
 validation state. The non-finalized reorganization window is additional to the
-12,000 finalized blocks. This is a block-count setting, not a total disk quota.
+10,000 finalized blocks. This is a block-count setting, not a total disk quota.
 
 The inspected official 10,000-block snapshot contained 14.12 GB of database
 files; only about 450 MB was transaction SST storage. The exact size with
-12,000 blocks depends on their transactions. Initially allow 25-30 GB of free
+10,000 blocks depends on their transactions. Initially allow 25-30 GB of free
 space for data and working headroom, then monitor actual use; that is an estimate,
 not a certified peak or a fixed limit. Container images and logs also use space.
 
-`ZEC_PRUNE_KEEP_BLOCKS` defaults to `12000` and is applied on every startup,
+`ZEC_PRUNE_KEEP_BLOCKS` defaults to `10000` and is applied on every startup,
 including to existing configs. Mainnet/Testnet values below `10000` are rejected.
 Do not set native `ZAKURA_`/`ZEBRA_` environment overrides for the managed storage
 mode, state cache path, or RPC security settings. Increasing retention cannot
@@ -114,7 +114,7 @@ The health check verifies authenticated RPC availability, not completion of sync
 | `PGID` | `100` | Node group ID |
 | `ZEC_NETWORK` | `mainnet` | `mainnet` or `testnet` |
 | `ZEC_MINER_ADDRESS` | unset | Optional Zcash payout address for mining templates |
-| `ZEC_PRUNE_KEEP_BLOCKS` | `12000` | Retained finalized block bodies, minimum `10000` |
+| `ZEC_PRUNE_KEEP_BLOCKS` | `10000` | Retained finalized block bodies, minimum `10000` |
 | `CLOUDFLARE_TUNNEL_TOKEN` | unset | Optional alternative to the token file |
 
 Network and mining settings generate the config only on first start. To change
@@ -150,7 +150,7 @@ cookie rotation on restart, and config persistence. It removes its own container
 and volumes and retains logs in `test-results/`. It does not download the chain
 or prove that the node is fully synced. GitHub Actions runs this test before
 publishing `latest`, `main`, and a commit-specific image tag for Linux amd64.
-Additional tests verify config migration and 12,000-block native retention by
+Additional tests verify config migration and 10,000-block native retention by
 mining past its boundary, checking old UTXOs through the address index, retaining
 headers/hashes, performing a recent reorganization, and mining after restart.
 
