@@ -9,6 +9,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: znode-pruning-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test-publish:
     runs-on: ubuntu-24.04

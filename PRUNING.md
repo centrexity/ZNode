@@ -31,7 +31,8 @@ The retained block count is not a hard byte quota.
 ## Separate database
 
 Pruned state lives under `/zcash/znode-pruned-v1/state/v28/<network>`, separate
-from the official archival database. Use separate data and config volumes when
+from the official archival database. Non-finalized backups also live under
+`/zcash/znode-pruned-v1/`. Use separate data and config volumes when
 testing. Turning off pruning does not restore deleted data; an archival node
 must sync its own database. Automatic format upgrades/downgrades are rejected
 for experimental state, because some upstream migrations require full history.

@@ -281,7 +281,7 @@ index d2ec28c..e868d2e 100644
  
      /// The estimated size of the block and undo files on disk
 diff --git a/zebra-state/src/config.rs b/zebra-state/src/config.rs
-index 310df4b..9f85ca6 100644
+index 310df4b..7dd001b 100644
 --- a/zebra-state/src/config.rs
 +++ b/zebra-state/src/config.rs
 @@ -114,6 +114,12 @@ pub struct Config {
@@ -314,7 +314,21 @@ index 310df4b..9f85ca6 100644
          }
      }
  
-@@ -246,6 +254,7 @@ impl Default for Config {
+@@ -214,7 +222,12 @@ impl Config {
+         }
+ 
+         let net_dir = network.lowercase_name();
+-        Some(self.cache_dir.join("non_finalized_state").join(net_dir))
++        let cache_dir = if self.prune_keep_blocks.is_some() {
++            self.cache_dir.join("znode-pruned-v1")
++        } else {
++            self.cache_dir.clone()
++        };
++        Some(cache_dir.join("non_finalized_state").join(net_dir))
+     }
+ 
+     /// Returns the path for the database format minor/patch version file,
+@@ -246,6 +259,7 @@ impl Default for Config {
          Self {
              cache_dir: default_cache_dir(),
              ephemeral: false,
@@ -621,10 +635,10 @@ index 120bcd2..d77511a 100644
          Ok(finalized.hash)
 diff --git a/zebra-state/src/service/finalized_state/zebra_db/pruning.rs b/zebra-state/src/service/finalized_state/zebra_db/pruning.rs
 new file mode 100644
-index 0000000..6fdb95f
+index 0000000..9686165
 --- /dev/null
 +++ b/zebra-state/src/service/finalized_state/zebra_db/pruning.rs
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,366 @@
 +//! Opt-in removal of old finalized block payloads, never validation state.
 +
 +use std::collections::BTreeSet;
@@ -846,6 +860,18 @@ index 0000000..6fdb95f
 +            pruned.db_path("state", 28, &Network::Mainnet),
 +            pruned.cache_dir.join("znode-pruned-v1/state/v28/mainnet")
 +        );
++        assert_ne!(
++            archive.non_finalized_state_backup_dir(&Network::Mainnet),
++            pruned.non_finalized_state_backup_dir(&Network::Mainnet)
++        );
++        assert_eq!(
++            pruned.non_finalized_state_backup_dir(&Network::Mainnet),
++            Some(
++                pruned
++                    .cache_dir
++                    .join("znode-pruned-v1/non_finalized_state/mainnet")
++            )
++        );
 +    }
 +
 +    #[test]
@@ -963,6 +989,10 @@ index 0000000..6fdb95f
 +        let reopened = FinalizedState::new_with_debug(&config, &Network::Mainnet, true, false)
 +            .expect("pruned state can reopen");
 +        assert!(reopened.db.block(Height(1).into()).is_none());
++        assert_eq!(
++            reopened.db.pruned_transaction_version(outpoint.hash),
++            Some(blocks[1].transactions[0].version())
++        );
 +        assert_eq!(reopened.db.block(Height(5).into()), Some(blocks[5].clone()));
 +        assert_eq!(
 +            reopened
