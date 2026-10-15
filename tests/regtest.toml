@@ -1,0 +1,17 @@
+[network]
+network = "Regtest"
+listen_addr = "127.0.0.1:18233"
+# A numeric loopback seed avoids upstream's startup DNS retry loop on Regtest.
+initial_testnet_peers = ["127.0.0.1:1"]
+cache_dir = "/zcash"
+
+[state]
+cache_dir = "/zcash"
+
+[rpc]
+listen_addr = "127.0.0.1:8232"
+enable_cookie_auth = true
+cookie_dir = "/config/rpc"
+
+[tracing]
+use_color = false
